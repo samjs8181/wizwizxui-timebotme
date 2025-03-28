@@ -2129,7 +2129,7 @@ if($botState['subLinkState'] == "on") $acc_text .= "
         ⏰ مدت کانفیگ: $volume گیگ
         حجم کانفیگ:  $days روز
         💰قیمت: $price تومان
-        ⁮⁮ ⁮⁮
+        ⁮⁮ ⁮⁮ ⁮⁮ ⁮⁮
         ",$keys,"html", $admin);
     
     }
@@ -4427,37 +4427,6 @@ if($data=="supportSection"){
         [['text'=>"تیکت های باز 📨",'callback_data'=>"usersOpenTickets"],['text'=>"📮 لیست تیکت ها", 'callback_data'=>"userAllTickets"]],
         [['text'=>$buttonValues['back_button'],'callback_data'=>"mainMenu"]]
         ]]));
-}
-if($data== "usersNewTicket"){
-    $stmt = $connection->prepare("SELECT * FROM `setting` WHERE `type` = 'TICKETS_CATEGORY'");
-    $stmt->execute();
-    $ticketCategory = $stmt->get_result();
-    $stmt->close();
-    $keys = array();
-    $temp = array();
-    if($ticketCategory->num_rows >0){
-        while($row = $ticketCategory->fetch_assoc()){
-            $ticketName = $row['value'];
-            $temp[] = ['text'=>$ticketName,'callback_data'=>"supportCat$ticketName"];
-            
-            if(count($temp) == 2){
-                array_push($keys,$temp);
-                $temp = null;
-            }
-        }
-        
-        if($temp != null){
-            if(count($temp)>0){
-                array_push($keys,$temp);
-                $temp = null;
-            }
-        }
-        $temp[] = ['text'=>$buttonValues['back_button'],'callback_data'=>"mainMenu"];
-        array_push($keys,$temp);
-        editText($message_id,"💠لطفا واحد مورد نظر خود را انتخاب نمایید!",json_encode(['inline_keyboard'=>$keys]));
-    }else{
-        alert("ای وای، ببخشید الان نیستم");
-    }
 }
 if($data == 'dayPlanSettings' and ($from_id == $admin || $userInfo['isAdmin'] == true)){
     $stmt = $connection->prepare("SELECT * FROM `increase_day`");
@@ -7561,7 +7530,7 @@ if(preg_match('/changeUserConfigState(\d+)/', $data,$match)){
     $server_id = $order['server_id'];
     $remark = $order['remark'];
     
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
+    $stmt = $connection->prepare("SELECT * FROM `server_config` WHERE `id`=?");
     $stmt->bind_param("i", $server_id);
     $stmt->execute();
     $server_info = $stmt->get_result()->fetch_assoc();
@@ -8706,7 +8675,7 @@ if(preg_match('/payIncreaseDayWithCartToCart(.*)/',$data,$match)) {
 
     exit;
 }
-if(preg_match('/payIncreaseDayWithCartToCart(.*)/',$userInfo['step'], $match) and $text != $buttonValues['cancel']){
+if(preg_match('/payIncreaseDayWithCartToCart(.*)/',$userInfo['step'],$match) and $text != $buttonValues['cancel']){
     if(isset($update->message->photo)){
         $stmt = $connection->prepare("SELECT * FROM `pays` WHERE `hash_id` = ?");
         $stmt->bind_param("s", $match[1]);
@@ -9658,7 +9627,7 @@ if(preg_match('/^addServerPanelUrl(.*)/',$userInfo['step'],$match) and $text != 
     
         exit();
     }else{
-        setUser('addServerIp' . json_encode($data,JSON_UNESCAPED_UNICODE));
+        setUser('addServerIp' . json_encode($data, JSON_UNESCAPED_UNICODE));
         sendMessage( "🔅 لطفا ip یا دامنه تانل شده پنل را وارد کنید:
     
     نمونه: 
@@ -10156,7 +10125,7 @@ if($userInfo['step'] == "addDiscountCode" && $text != $buttonValues['cancel'] &&
         $dInfo['amount'] = $text;
         setUser("addDiscountDate" . json_encode($dInfo,JSON_UNESCAPED_UNICODE));
         sendMessage("🔘|لطفا مدت زمان این تخفیف را به روز وارد کنید\nبرای نامحدود بودن 0 وارد کنید");
-    }else sendMessage("🔘|لطفا فقط عدد و یا درصد بفرستید");
+    }else sendMessage("🔘|لطفا فقط عدد یا درصد بفرستید");
 }
 if(preg_match('/^addDiscountDate(.*)/',$userInfo['step'],$match) && $text != $buttonValues['cancel'] && ($from_id == $admin || $userInfo['isAdmin'] == true)){
     if(is_numeric($text)){

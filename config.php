@@ -3,111 +3,223 @@ include_once "settings/values.php";
 include_once 'settings/jdf.php';
 include_once 'baseInfo.php';
 
-$connection = new mysqli('localhost',$dbUserName,$dbPassword,$dbName);
-if($connection->connect_error){
-    exit("error " . $connection->connect_error);  
-}
-$connection->set_charset("utf8mb4");
+// Database Configuration
+define('DB_HOST', 'localhost');
+define('DB_USER', $dbUserName);
+define('DB_PASS', $dbPassword);
+define('DB_NAME', $dbName);
 
-function bot($method, $datas = []){
-    global $botToken;
-    $url = "https://api.telegram.org/bot" . $botToken . "/" . $method;
-    $ch = curl_init(); 
+// Redis Configuration
+define('REDIS_HOST', 'localhost');
+define('REDIS_PORT', 6379);
+define('REDIS_PASSWORD', '');
+
+// Logging Configuration
+define('LOG_LEVEL', 'INFO');
+define('LOG_FILE', 'bot.log');
+define('LOG_ROTATE_SIZE', 5 * 1024 * 1024); // 5MB
+define('LOG_KEEP_DAYS', 30);
+
+// Security Configuration
+define('CSRF_TOKEN_LENGTH', 32);
+define('RATE_LIMIT_WINDOW', 60); // seconds
+define('MAX_REQUESTS_PER_WINDOW', 100);
+define('MAX_LOGIN_ATTEMPTS', 3);
+define('LOGIN_TIMEOUT', 300); // 5 minutes
+
+// Cache Configuration
+define('CACHE_TTL', 3600); // 1 hour
+define('CACHE_PREFIX', 'bot_');
+
+// Bot Configuration
+define('BOT_TOKEN', $botToken);
+define('ADMIN_ID', $admin);
+define('BOT_USERNAME', $botUsername);
+define('BOT_WEBHOOK_URL', $botUrl);
+
+// Payment Gateway Configuration
+define('NEXTPAY_API_KEY', $nextpayApiKey);
+define('ZARINPAL_MERCHANT', $zarinpalMerchant);
+define('NOWPAYMENT_API_KEY', $nowPaymentApiKey);
+
+// Initialize components
+$logger = new Logger(LOG_FILE, LOG_LEVEL);
+$cache = new Cache($logger);
+$db = new Database($logger);
+$security = new Security($db, $cache, $logger);
+$rateLimiter = new RateLimiter($cache, $logger);
+
+// Helper Functions
+function bot($method, $datas = []) {
+    $url = "https://api.telegram.org/bot" . BOT_TOKEN . "/" . $method;
+    $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true); 
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($datas));
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    
     $res = curl_exec($ch);
     if (curl_error($ch)) {
-        var_dump(curl_error($ch));
-    } else {
-        return json_decode($res);
+        $logger->logError("CURL Error: " . curl_error($ch));
+        return false;
     }
+    curl_close($ch);
+    
+    return json_decode($res);
 }
-function sendMessage($txt, $key = null, $parse ="MarkDown", $ci= null, $msg = null){
-    global $from_id;
-    $ci = $ci??$from_id;
-    return bot('sendMessage',[
-        'chat_id'=>$ci,
-        'text'=>$txt,
-        'reply_to_message_id'=>$msg,
-        'reply_markup'=>$key,
-        'parse_mode'=>$parse
-    ]);
-}
-function editKeys($keys = null, $msgId = null, $ci = null){
-    global $from_id,$message_id;
-    $ci = $ci??$from_id;
-    $msgId = $msgId??$message_id;
-   
-    bot('editMessageReplyMarkup',[
-		'chat_id' => $ci,
-		'message_id' => $msgId,
-		'reply_markup' => $keys
-    ]);
-}
-function editText($msgId, $txt, $key = null, $parse = null, $ci = null){
-    global $from_id;
-    $ci = $ci??$from_id;
 
+function sendMessage($txt, $key = null, $parse = "MarkDown", $ci = null, $msg = null) {
+    global $from_id;
+    $ci = $ci ?? $from_id;
+    return bot('sendMessage', [
+        'chat_id' => $ci,
+        'text' => $txt,
+        'reply_to_message_id' => $msg,
+        'reply_markup' => $key,
+        'parse_mode' => $parse
+    ]);
+}
+
+function editKeys($keys = null, $msgId = null, $ci = null) {
+    global $from_id, $message_id;
+    $ci = $ci ?? $from_id;
+    $msgId = $msgId ?? $message_id;
+    
+    return bot('editMessageReplyMarkup', [
+        'chat_id' => $ci,
+        'message_id' => $msgId,
+        'reply_markup' => $keys
+    ]);
+}
+
+function editText($msgId, $txt, $key = null, $parse = null, $ci = null) {
+    global $from_id;
+    $ci = $ci ?? $from_id;
     return bot('editMessageText', [
         'chat_id' => $ci,
         'message_id' => $msgId,
         'text' => $txt,
-        'parse_mode' => $parse,
-        'reply_markup' =>  $key
-        ]);
+        'reply_markup' => $key,
+        'parse_mode' => $parse
+    ]);
 }
-function delMessage($msg = null, $chat_id = null){
-    global $from_id, $message_id;
-    $msg = $msg??$message_id;
-    $chat_id = $chat_id??$from_id;
-    
-    return bot('deleteMessage',[
-        'chat_id'=>$chat_id,
-        'message_id'=>$msg
-        ]);
-}
-function sendAction($action, $ci= null){
-    global $from_id;
-    $ci = $ci??$from_id;
 
-    return bot('sendChatAction',[
-        'chat_id'=>$ci,
-        'action'=>$action
+function delMessage($msg = null, $chat_id = null) {
+    global $message_id, $from_id;
+    $msg = $msg ?? $message_id;
+    $chat_id = $chat_id ?? $from_id;
+    return bot('deleteMessage', [
+        'chat_id' => $chat_id,
+        'message_id' => $msg
     ]);
 }
-function forwardmessage($tochatId, $fromchatId, $message_id){
-    return bot('forwardMessage',[
-        'chat_id'=>$tochatId,
-        'from_chat_id'=>$fromchatId,
-        'message_id'=>$message_id
-    ]);
-}
-function sendPhoto($photo, $caption = null, $keyboard = null, $parse = "MarkDown", $ci =null){
+
+function sendAction($action, $ci = null) {
     global $from_id;
-    $ci = $ci??$from_id;
-    return bot('sendPhoto',[
-        'chat_id'=>$ci,
-        'caption'=>$caption,
-        'reply_markup'=>$keyboard,
-        'photo'=>$photo,
-        'parse_mode'=>$parse
+    $ci = $ci ?? $from_id;
+    return bot('sendChatAction', [
+        'chat_id' => $ci,
+        'action' => $action
     ]);
 }
-function getFileUrl($fileid){
-    $filePath = bot('getFile',[
-        'file_id'=>$fileid
-    ])->result->file_path;
-    return "https://api.telegram.org/file/bot" . $botToken . "/" . $filePath;
+
+function forwardMessage($toChatId, $fromChatId, $messageId) {
+    return bot('forwardMessage', [
+        'chat_id' => $toChatId,
+        'from_chat_id' => $fromChatId,
+        'message_id' => $messageId
+    ]);
 }
-function alert($txt, $type = false, $callid = null){
-    global $callbackId;
-    $callid = $callid??$callbackId;
-    return bot('answercallbackquery', [
-        'callback_query_id' => $callid,
+
+function sendPhoto($photo, $caption = null, $keyboard = null, $parse = "MarkDown", $ci = null) {
+    global $from_id;
+    $ci = $ci ?? $from_id;
+    return bot('sendPhoto', [
+        'chat_id' => $ci,
+        'photo' => $photo,
+        'caption' => $caption,
+        'reply_markup' => $keyboard,
+        'parse_mode' => $parse
+    ]);
+}
+
+function getFileUrl($fileId) {
+    $result = bot('getFile', ['file_id' => $fileId]);
+    if ($result && $result->ok) {
+        return "https://api.telegram.org/file/bot" . BOT_TOKEN . "/" . $result->result->file_path;
+    }
+    return false;
+}
+
+function alert($txt, $type = false, $callId = null) {
+    global $callback_query_id;
+    $callId = $callId ?? $callback_query_id;
+    return bot('answerCallbackQuery', [
+        'callback_query_id' => $callId,
         'text' => $txt,
         'show_alert' => $type
     ]);
+}
+
+// Security Functions
+function check($return = false) {
+    global $security;
+    return $security->checkRequest();
+}
+
+function generateHash($length = 32) {
+    return bin2hex(random_bytes($length));
+}
+
+function validatePhone($phone) {
+    return preg_match('/^\+98(\d+)$/', $phone) || 
+           preg_match('/^98(\d+)$/', $phone) || 
+           preg_match('/^0098(\d+)$/', $phone);
+}
+
+// Database Functions
+function setUser($value = 'none', $field = 'step') {
+    global $db, $from_id;
+    return $db->setUser($from_id, $field, $value);
+}
+
+function getSettings($key) {
+    global $db;
+    return $db->getSettings($key);
+}
+
+function setSettings($key, $value) {
+    global $db;
+    return $db->setSettings($key, $value);
+}
+
+// Cache Functions
+function getCache($key) {
+    global $cache;
+    return $cache->get(CACHE_PREFIX . $key);
+}
+
+function setCache($key, $value, $ttl = CACHE_TTL) {
+    global $cache;
+    return $cache->set(CACHE_PREFIX . $key, $value, $ttl);
+}
+
+// Logging Functions
+function logError($message) {
+    global $logger;
+    $logger->logError($message);
+}
+
+function logInfo($message) {
+    global $logger;
+    $logger->logInfo($message);
+}
+
+// Rate Limiting Functions
+function checkRateLimit($type = 'default') {
+    global $rateLimiter, $from_id;
+    return $rateLimiter->checkLimit($from_id, $type);
 }
 
 $range = [
@@ -118,20 +230,6 @@ $range = [
         '91.108.8.0/22',
         '95.161.64.0/20',
     ];
-function check($return = false){
-    global $range;
-    foreach ($range as $rg) {
-        if (ip_in_range($_SERVER['REMOTE_ADDR'], $rg)) {
-            return true;
-        }
-    }
-    if ($return == true) {
-        return false;
-    }
-
-    die('You do not have access');
-
-}
 function curl_get_file_contents($URL){
     $c = curl_init();
     curl_setopt($c, CURLOPT_RETURNTRANSFER, 1);
@@ -1283,7 +1381,7 @@ function getDiscountCodeKeys(){
             $rowId = $row['id'];
             $canUse = $row['can_use'];
             
-            $keys[] = [['text'=>'❌','callback_data'=>"delDiscount" . $rowId],['text'=>$canUse, 'callback_data'=>"wizwizch"],['text'=>$date,'callback_data'=>"wizwizch"],['text'=>$count,'callback_data'=>"wizwizch"],['text'=>$amount,'callback_data'=>"wizwizch"],['text'=>$hashId,'callback_data'=>'copyHash' . $hashId]];
+            $keys[] = [['text'=>'❌','callback_data'=>"delDiscount" . $rowId],['text'=>$canUse, 'callback_data'=>"wizwizch"],['text'=>$date,'callback_data'=>"wizwizch"],['text'=>$count,'callback_data'=>"wizwizch"],['text'=>$amount,'callback_data'=>"wizwizch"],['text'=>$hashId,'callback_data'=>"copyHash" . $hashId]];
         }
     }else{
         $keys[] = [['text'=>"کد تخفیفی یافت نشد",'callback_data'=>"wizwizch"]];
@@ -3164,17 +3262,17 @@ function editClientRemark($server_id, $inbound_id, $uuid, $newRemark){
 
 }
 function editClientTraffic($server_id, $inbound_id, $uuid, $volume, $days, $editType = null){
-    global $connection;
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
+    global $db, $cache, $logger;
+    $server_info = $db->getServerConfig($server_id);
+    if (!$server_info) {
+        $logger->logError("Server config not found for ID: $server_id");
+        return null;
+    }
     $panel_url = $server_info['panel_url'];
     $serverType = $server_info['type'];
 
     $response = getJson($server_id);
-    if(!$response) return null;
+    if (!$response) return null;
     $response = $response->obj;
     $client_key = 0;
     foreach($response as $row){
@@ -3335,12 +3433,12 @@ function editClientTraffic($server_id, $inbound_id, $uuid, $volume, $days, $edit
 
 }
 function deleteInbound($server_id, $uuid, $delete = 0){
-    global $connection;
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
+    global $db, $cache, $logger;
+    $server_info = $db->getServerConfig($server_id);
+    if (!$server_info) {
+        $logger->logError("Server config not found for ID: $server_id");
+        return null;
+    }
     $panel_url = $server_info['panel_url'];
     $serverType = $server_info['type'];
 
@@ -3436,12 +3534,12 @@ function deleteInbound($server_id, $uuid, $delete = 0){
     return $oldData;
 }
 function resetIpLog($server_id, $remark){
-    global $connection;
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
+    global $db, $cache, $logger;
+    $server_info = $db->getServerConfig($server_id);
+    if (!$server_info) {
+        $logger->logError("Server config not found for ID: $server_id");
+        return null;
+    }
     $panel_url = $server_info['panel_url'];
     $serverType = $server_info['type'];
 
@@ -3512,12 +3610,12 @@ function resetIpLog($server_id, $remark){
     return $response = json_decode($response);
 }
 function resetClientTraffic($server_id, $remark, $inboundId = null){
-    global $connection;
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
+    global $db, $cache, $logger;
+    $server_info = $db->getServerConfig($server_id);
+    if (!$server_info) {
+        $logger->logError("Server config not found for ID: $server_id");
+        return null;
+    }
     $panel_url = $server_info['panel_url'];
     $serverType = $server_info['type'];
 
@@ -3587,12 +3685,12 @@ function resetClientTraffic($server_id, $remark, $inboundId = null){
     return $response = json_decode($response);
 }
 function addInboundAccount($server_id, $client_id, $inbound_id, $expiryTime, $remark, $volume, $limitip = 1, $newarr = '', $planId = null){
-    global $connection;
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
+    global $db, $cache, $logger;
+    $server_info = $db->getServerConfig($server_id);
+    if (!$server_info) {
+        $logger->logError("Server config not found for ID: $server_id");
+        return null;
+    }
 
     $panel_url = $server_info['panel_url'];
     $serverType = $server_info['type'];
@@ -3616,11 +3714,11 @@ function addInboundAccount($server_id, $client_id, $inbound_id, $expiryTime, $re
     if($newarr == ''){
 		if($serverType == "sanaei" || $serverType == "alireza"){
 		    if($reality == "true"){
-                $stmt = $connection->prepare("SELECT * FROM `server_plans` WHERE `id`=?");
-                $stmt->bind_param("i", $planId);
-                $stmt->execute();
-                $file_detail = $stmt->get_result()->fetch_assoc();
-                $stmt->close();
+                $file_detail = $db->getPlanDetails($planId);
+                if (!$file_detail) {
+                    $logger->logError("Plan details not found for ID: $planId");
+                    return null;
+                }
             
                 $flow = isset($file_detail['flow']) && $file_detail['flow'] != "None" ? $file_detail['flow'] : "";
                 
@@ -3771,7 +3869,7 @@ function addInboundAccount($server_id, $client_id, $inbound_id, $expiryTime, $re
 
 }
 function getNewHeaders($netType, $request_header, $response_header, $type){
-    global $connection;
+    global $db, $cache, $logger;
     $input = explode(':', $request_header);
     $key = $input[0];
     $value = $input[1];
@@ -3826,12 +3924,12 @@ function getNewHeaders($netType, $request_header, $response_header, $type){
 
 }
 function getConnectionLink($server_id, $uniqid, $protocol, $remark, $port, $netType, $inbound_id = 0, $rahgozar = false, $customPath = false, $customPort = 0, $customSni = null){
-    global $connection;
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
+    global $db, $cache, $logger;
+    $server_info = $db->getServerConfig($server_id);
+    if (!$server_info) {
+        $logger->logError("Server config not found for ID: $server_id");
+        return null;
+    }
 
     $panel_url = $server_info['panel_url'];
     $server_ip = $server_info['ip'];
@@ -4352,855 +4450,7 @@ function updateConfig($server_id, $inboundId, $protocol, $netType = 'tcp', $secu
     "serviceName": "' . parse_url($panel_url, PHP_URL_HOST) . '"
   }
 }';
-		}
-	    }
-
-
-        $dataArr = array('up' => $row->up,'down' => $row->down,'total' => $row->total,'remark' => $remark,'enable' => 'true',
-            'expiryTime' => $row->expiryTime,'listen' => '','port' => $row->port,'protocol' => $protocol,'settings' => $settings,'streamSettings' => $streamSettings,
-            'sniffing' => $row->sniffing);
-    }else{
-        if($netType != "grpc"){
-            if($rahgozar == true){
-                $wsSettings = '{
-                      "network": "ws",
-                      "security": "none",
-                      "wsSettings": {
-                        "path": "/wss' . $row->port . '",
-                        "headers": {}
-                      }
-                    }';
-            }
-            else{
-                if($security == 'tls') {
-                    $tcpSettings = '{
-            	  "network": "tcp",
-            	  "security": "'.$security.'",
-            	  "tlsSettings": '.$tlsSettings.',
-            	  "tcpSettings": {
-                    "header": '.$headers.'
-                  }
-            	}';
-                    $wsSettings = '{
-                  "network": "ws",
-                  "security": "'.$security.'",
-            	  "tlsSettings": '.$tlsSettings.',
-                  "wsSettings": {
-                    "path": "/",
-                    "headers": '.$headers.'
-                  }
-                }';
-                }
-                elseif($security == 'xtls' && $serverType != "sanaei" && $serverType != "alireza") {
-                    $tcpSettings = '{
-            	  "network": "tcp",
-            	  "security": "'.$security.'",
-            	  "' . $xtlsTitle . '": '.$tlsSettings.',
-            	  "tcpSettings": {
-                    "header": '.$headers.'
-                  }
-            	}';
-                    $wsSettings = '{
-                  "network": "ws",
-                  "security": "'.$security.'",
-            	  "' . $xtlsTitle . '": '.$tlsSettings.',
-                  "wsSettings": {
-                    "path": "/",
-                    "headers": '.$headers.'
-                  }
-                }';
-                }
-                else {
-                    $tcpSettings = '{
-            	  "network": "tcp",
-            	  "security": "none",
-            	  "tcpSettings": {
-            		"header": '.$headers.'
-            	  }
-            	}';
-                    $wsSettings = '{
-                  "network": "ws",
-                  "security": "none",
-                  "wsSettings": {
-                    "path": "/",
-                    "headers": {}
-                  }
-                }';
-                }
-            }
-            $streamSettings = ($netType == 'tcp') ? $tcpSettings : $wsSettings;
-        }
-
-        $dataArr = array('up' => $row->up,'down' => $row->down,'total' => $row->total,'remark' => $remark,'enable' => 'true',
-            'expiryTime' => $row->expiryTime,'listen' => '','port' => $row->port,'protocol' => $protocol,'settings' => $settings,
-            'streamSettings' => $streamSettings,
-            'sniffing' => $row->sniffing);
-    }
-
-    $serverName = $server_info['username'];
-    $serverPass = $server_info['password'];
-    
-    $loginUrl = $panel_url . '/login';
-    
-    $postFields = array(
-        "username" => $serverName,
-        "password" => $serverPass
-        );
-        
-    $curl = curl_init();
-    curl_setopt($curl, CURLOPT_URL, $loginUrl);
-    curl_setopt($curl, CURLOPT_FOLLOWLOCATION, 1);
-    curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
-    curl_setopt($curl, CURLOPT_POST, 1);
-    curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 3);
-    curl_setopt($curl, CURLOPT_TIMEOUT, 3); 
-    curl_setopt($curl, CURLOPT_POSTFIELDS, http_build_query($postFields));
-    curl_setopt($curl, CURLOPT_HEADER, 1);
-    $response = curl_exec($curl);
-
-    $header_size = curl_getinfo($curl, CURLINFO_HEADER_SIZE);
-    $header = substr($response, 0, $header_size);
-    $body = substr($response, $header_size);
-    preg_match_all('/^Set-Cookie:\s*([^;]*)/mi', $header, $matches);
-    $cookies = array();
-    foreach($matches[1] as $item) {
-        parse_str($item, $cookie);
-        $cookies = array_merge($cookies, $cookie);
-    }
-
-    $loginResponse = json_decode($body,true);
-    if(!$loginResponse['success']){
-        curl_close($curl);
-        return $loginResponse;
-    }
-    
-    if($serverType == "sanaei") $url = "$panel_url/panel/inbound/update/$iid";
-    else $url = "$panel_url/xui/inbound/update/$iid";
-    curl_setopt_array($curl, array(
-        CURLOPT_URL => $url,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_ENCODING => '',
-        CURLOPT_MAXREDIRS => 10,
-        CURLOPT_CONNECTTIMEOUT => 15,
-        CURLOPT_TIMEOUT => 15,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-        CURLOPT_CUSTOMREQUEST => 'POST',
-        CURLOPT_POSTFIELDS => $dataArr,
-        CURLOPT_SSL_VERIFYHOST => false,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_HEADER => false,
-        CURLOPT_HTTPHEADER => array(
-            'User-Agent:  Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:108.0) Gecko/20100101 Firefox/108.0',
-            'Accept:  application/json, text/plain, */*',
-            'Accept-Language:  en-US,en;q=0.5',
-            'Accept-Encoding:  gzip, deflate',
-            'X-Requested-With:  XMLHttpRequest',
-            'Cookie: ' . array_keys($cookies)[0] . "=" . $cookies[array_keys($cookies)[0]]
-        )
-    ));
-
-    $response = curl_exec($curl);
-    curl_close($curl);
-    return $response = json_decode($response);
-}
-function editInbound($server_id, $uniqid, $uuid, $protocol, $netType = 'tcp', $security = 'none', $rahgozar = false){
-    global $connection;
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-
-    $panel_url = $server_info['panel_url'];
-    $security = $server_info['security'];
-    $tlsSettings = $server_info['tlsSettings'];
-    $header_type = $server_info['header_type'];
-    $request_header = $server_info['request_header'];
-    $response_header = $server_info['response_header'];
-    $serverType = $server_info['type'];
-    $xtlsTitle = ($serverType == "sanaei" || $serverType == "alireza")?"XTLSSettings":"xtlsSettings";
-    $sni = $server_info['sni'];
-    if(!empty($sni) && ($serverType == "sanaei" || $serverType == "alireza")){
-        $tlsSettings = json_decode($tlsSettings,true);
-        $tlsSettings['serverName'] = $sni;
-        $tlsSettings = json_encode($tlsSettings);
-    }
-
-    $response = getJson($server_id);
-    if(!$response) return null;
-    $response = $response->obj;
-    foreach($response as $row){
-        $clients = json_decode($row->settings)->clients;
-        if($clients[0]->id == $uuid || $clients[0]->password == $uuid) {
-            $iid = $row->id;
-            $remark = $row->remark;
-            $streamSettings = $row->streamSettings;
-            $settings = $row->settings;
-            break;
-        }
-    }
-    if(!intval($iid)) return;
-
-    $headers = getNewHeaders($netType, $request_header, $response_header, $header_type);
-    $headers = empty($headers)?"{}":$headers;
-
-    if($protocol == 'trojan'){
-        if($security == 'none'){
-            $tcpSettings = '{
-        	  "network": "tcp",
-        	  "security": "'.$security.'",
-        	  "tlsSettings": '.$tlsSettings.',
-        	  "tcpSettings": {
-                "header": '.$headers.'
-              }
-        	}';
-                $wsSettings = '{
-              "network": "ws",
-              "security": "'.$security.'",
-        	  "tlsSettings": '.$tlsSettings.',
-              "wsSettings": {
-                "path": "/",
-                "headers": '.$headers.'
-              }
-            }';
-
-    	if($serverType == "sanaei" || $serverType == "alireza"){
-            $settings = '{
-        	  "clients": [
-        		{
-        		  "id": "'.$uniqid.'",
-                  "enable": true,
-        		  "email": "' . $remark. '",
-                  "limitIp": 0,
-                  "totalGB": 0,
-                  "expiryTime": 0,
-                  "subId": "' . RandomString(16) . '"
-        		}
-        	  ],
-        	  "decryption": "none",
-        	  "fallbacks": []
-        	}';
-    	}else{
-            $settings = '{
-        	  "clients": [
-        		{
-        		  "id": "'.$uniqid.'",
-        		  "flow": "",
-        		  "email": "' . $remark. '"
-        		}
-        	  ],
-        	  "decryption": "none",
-        	  "fallbacks": []
-        	}';
-    	}
-        }elseif($security == 'xtls' && $serverType != "sanaei" && $serverType != "alireza") {
-            
-            $tcpSettings = '{
-        	  "network": "tcp",
-        	  "security": "'.$security.'",
-        	  "' . $xtlsTitle . '": '.$tlsSettings.',
-        	  "tcpSettings": {
-                "header": '.$headers.'
-              }
-        	}';
-                $wsSettings = '{
-              "network": "ws",
-              "security": "'.$security.'",
-        	  "' . $xtlsTitle . '": '.$tlsSettings.',
-              "wsSettings": {
-                "path": "/",
-                "headers": '.$headers.'
-              }
-            }';
-
-                $settings = '{
-              "clients": [
-                {
-                  "id": "'.$uniqid.'",
-    			  "flow": "xtls-rprx-direct".
-    			  "email": "' . $remark. '"
-                }
-              ],
-              "decryption": "none",
-        	  "fallbacks": []
-            }';
-        }
-        else{
-            $tcpSettings = '{
-        	  "network": "tcp",
-        	  "security": "'.$security.'",
-        	  "tlsSettings": '.$tlsSettings.',
-        	  "tcpSettings": {
-                "header": '.$headers.'
-              }
-        	}';
-            $wsSettings = '{
-              "network": "ws",
-              "security": "'.$security.'",
-        	  "tlsSettings": '.$tlsSettings.',
-              "wsSettings": {
-                "path": "/",
-                "headers": '.$headers.'
-              }
-            }';
-		if($serverType == "sanaei" || $serverType == "alireza"){
-            $settings = '{
-		  "clients": [
-			{
-			  "password": "'.$uniqid.'",
-              "enable": true,
-			  "email": "' . $remark. '",
-              "limitIp": 0,
-              "totalGB": 0,
-              "expiryTime": 0,
-              "subId": "' . RandomString(16) . '"
-			}
-		  ],
-		  "fallbacks": []
-		}';
-		}else{
-            $settings = '{
-		  "clients": [
-			{
-			  "password": "'.$uniqid.'",
-			  "flow": "",
-			  "email": "' . $remark. '"
-			}
-		  ],
-		  "fallbacks": []
-		}';
-		}
-        }
-        
-        
-                $streamSettings = ($netType == 'tcp') ? $tcpSettings : $wsSettings;
-		if($netType == 'grpc'){
-		    $keyFileInfo = json_decode($tlsSettings,true);
-		    $certificateFile = "/root/cert.crt";
-		    $keyFile = '/root/private.key';
-		    
-		    if(isset($keyFileInfo['certificates'])){
-		        $certificateFile = $keyFileInfo['certificates'][0]['certificateFile'];
-		        $keyFile = $keyFileInfo['certificates'][0]['keyFile'];
-		    }
-
-			if($security == 'tls') {
-				$streamSettings = '{
-  "network": "grpc",
-  "security": "tls",
-  "tlsSettings": {
-    "serverName": "' .
-    (!empty($sni) && ($serverType == "sanaei" || $serverType == "alireza") ?  $sni: parse_url($panel_url, PHP_URL_HOST))
-     . '",
-    "certificates": [
-      {
-        "certificateFile": "' . $certificateFile . '",
-        "keyFile": "' . $keyFile . '"
-      }
-    ],
-    "alpn": []'
-    .'
-  },
-  "grpcSettings": {
-    "serviceName": ""
-  }
 }';
-		    }else{
-			$streamSettings = '{
-  "network": "grpc",
-  "security": "none",
-  "grpcSettings": {
-    "serviceName": "' . parse_url($panel_url, PHP_URL_HOST) . '"
-  }
-}';
-		}
-	    }
-
-
-        $dataArr = array('up' => $row->up,'down' => $row->down,'total' => $row->total,'remark' => $remark,'enable' => 'true',
-            'expiryTime' => $row->expiryTime,'listen' => '','port' => $row->port,'protocol' => $protocol,'settings' => $settings,'streamSettings' => $streamSettings,
-            'sniffing' => $row->sniffing);
-    }else{
-        if($netType != "grpc"){
-            if($rahgozar == true){
-                $wsSettings = '{
-                      "network": "ws",
-                      "security": "none",
-                      "wsSettings": {
-                        "path": "/wss' . $row->port . '",
-                        "headers": {}
-                      }
-                    }';
-                if($serverType == "sanaei" || $serverType == "alireza"){
-                    $settings = '{
-            	  "clients": [
-            		{
-            		  "id": "'.$client_id.'",
-                      "enable": true,
-            		  "email": "' . $remark. '",
-                      "limitIp": 0,
-                      "totalGB": 0,
-                      "expiryTime": 0
-                      "subId": "' . RandomString(16) . '"
-            		}
-            	  ],
-            	  "decryption": "none",
-            	  "fallbacks": []
-            	}';
-                }else{
-                $settings = '{
-        	  "clients": [
-        		{
-        		  "id": "'.$client_id.'",
-        		  "flow": "",
-        		  "email": "' . $remark. '"
-        		}
-        	  ],
-        	  "decryption": "none",
-        	  "fallbacks": []
-        	}';
-            }
-            }
-            else{
-                if($security == 'tls') {
-                    $tcpSettings = '{
-            	  "network": "tcp",
-            	  "security": "'.$security.'",
-            	  "tlsSettings": '.$tlsSettings.',
-            	  "tcpSettings": {
-                    "header": '.$headers.'
-                  }
-            	}';
-                    $wsSettings = '{
-                  "network": "ws",
-                  "security": "'.$security.'",
-            	  "tlsSettings": '.$tlsSettings.',
-                  "wsSettings": {
-                    "path": "/",
-                    "headers": '.$headers.'
-                  }
-                }';
-                if($serverType == "sanaei" || $serverType == "alireza"){
-                    $settings = '{
-                  "clients": [
-                    {
-                      "id": "'.$uniqid.'",
-                      "enable": true,
-                      "email": "' . $remark. '",
-                      "limitIp": 0,
-                      "totalGB": 0,
-                      "expiryTime": 0,
-                      "subId": "' . RandomString(16) . '"
-                    }
-                  ],
-                  "decryption": "none",
-            	  "fallbacks": []
-                }';
-                }else{
-                    $settings = '{
-                  "clients": [
-                    {
-                      "id": "'.$uniqid.'",
-                      "alterId": 0
-                    }
-                  ],
-                  "decryption": "none",
-            	  "fallbacks": []
-                }';
-                }
-                }
-                elseif($security == 'xtls' && $serverType != "sanaei" && $serverType != "alireza") {
-                    $tcpSettings = '{
-            	  "network": "tcp",
-            	  "security": "'.$security.'",
-            	  "' . $xtlsTitle . '": '.$tlsSettings.',
-            	  "tcpSettings": {
-                    "header": '.$headers.'
-                  }
-            	}';
-                    $wsSettings = '{
-                  "network": "ws",
-                  "security": "'.$security.'",
-            	  "' . $xtlsTitle . '": '.$tlsSettings.',
-                  "wsSettings": {
-                    "path": "/",
-                    "headers": '.$headers.'
-                  }
-                }';
-                if($serverType == "sanaei" || $serverType == "alireza"){
-                    $settings = '{
-                  "clients": [
-                    {
-                      "id": "'.$uniqid.'",
-                      "enable": true,
-                      "email": "' . $remark. '",
-                      "limitIp": 0,
-                      "totalGB": 0,
-                      "expiryTime": 0,
-                      "subId": "' . RandomString(16) . '"
-                    }
-                  ],
-                  "decryption": "none",
-            	  "fallbacks": []
-                }';
-                }else{
-                    $settings = '{
-                  "clients": [
-                    {
-                      "id": "'.$uniqid.'",
-        			  "flow": "",
-        			  "email": "' . $remark. '"
-                    }
-                  ],
-                  "decryption": "none",
-            	  "fallbacks": []
-                }';
-                }
-                }
-                else {
-                    $tcpSettings = '{
-            	  "network": "tcp",
-            	  "security": "none",
-            	  "tcpSettings": {
-            		"header": '.$headers.'
-            	  }
-            	}';
-                    $wsSettings = '{
-                  "network": "ws",
-                  "security": "none",
-                  "wsSettings": {
-                    "path": "/",
-                    "headers": {}
-                  }
-                }';
-                if($serverType == "sanaei" || $serverType == "alireza"){
-                    $settings = '{
-            	  "clients": [
-            		{
-            		  "id": "'.$uniqid.'",
-                      "enable": true,
-            		  "email": "' . $remark. '",
-                      "limitIp": 0,
-                      "totalGB": 0,
-                      "expiryTime": 0,
-                      "subId": "' . RandomString(16) . '"
-            		}
-            	  ],
-            	  "decryption": "none",
-            	  "fallbacks": []
-            	}';
-                }else{
-                    $settings = '{
-            	  "clients": [
-            		{
-            		  "id": "'.$uniqid.'",
-            		  "flow": "",
-            		  "email": "' . $remark. '"
-            		}
-            	  ],
-            	  "decryption": "none",
-            	  "fallbacks": []
-            	}';
-                }
-                }
-            }
-            $streamSettings = ($netType == 'tcp') ? $tcpSettings : $wsSettings;
-        }
-
-
-        $dataArr = array('up' => $row->up,'down' => $row->down,'total' => $row->total,'remark' => $remark,'enable' => 'true',
-            'expiryTime' => $row->expiryTime,'listen' => '','port' => $row->port,'protocol' => $protocol,'settings' => $settings,
-            'streamSettings' => $streamSettings,
-            'sniffing' => $row->sniffing);
-    }
-
-
-
-    $serverName = $server_info['username'];
-    $serverPass = $server_info['password'];
-    
-    $loginUrl = $panel_url . '/login';
-    
-    $postFields = array(
-        "username" => $serverName,
-        "password" => $serverPass
-        );
-        
-    $curl = curl_init();
-    curl_setopt($curl, CURLOPT_URL, $loginUrl);
-    curl_setopt($curl, CURLOPT_FOLLOWLOCATION, 1);
-    curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
-    curl_setopt($curl, CURLOPT_POST, 1);
-    curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 3);
-    curl_setopt($curl, CURLOPT_TIMEOUT, 3); 
-    curl_setopt($curl, CURLOPT_POSTFIELDS, http_build_query($postFields));
-    curl_setopt($curl, CURLOPT_HEADER, 1);
-    $response = curl_exec($curl);
-
-    $header_size = curl_getinfo($curl, CURLINFO_HEADER_SIZE);
-    $header = substr($response, 0, $header_size);
-    $body = substr($response, $header_size);
-    preg_match_all('/^Set-Cookie:\s*([^;]*)/mi', $header, $matches);
-    $cookies = array();
-    foreach($matches[1] as $item) {
-        parse_str($item, $cookie);
-        $cookies = array_merge($cookies, $cookie);
-    }
-
-    $loginResponse = json_decode($body,true);
-    if(!$loginResponse['success']){
-        curl_close($curl);
-        return $loginResponse;
-    }
-    
-    if($serverType == "sanaei") $url = "$panel_url/panel/inbound/update/$iid";
-    else $url = "$panel_url/xui/inbound/update/$iid";
-    
-    curl_setopt_array($curl, array(
-        CURLOPT_URL => $url,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_ENCODING => '',
-        CURLOPT_MAXREDIRS => 10,
-        CURLOPT_CONNECTTIMEOUT => 15,
-        CURLOPT_TIMEOUT => 15,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-        CURLOPT_CUSTOMREQUEST => 'POST',
-        CURLOPT_POSTFIELDS => $dataArr,
-        CURLOPT_SSL_VERIFYHOST => false,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_HEADER => false,
-        CURLOPT_HTTPHEADER => array(
-            'User-Agent:  Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:108.0) Gecko/20100101 Firefox/108.0',
-            'Accept:  application/json, text/plain, */*',
-            'Accept-Language:  en-US,en;q=0.5',
-            'Accept-Encoding:  gzip, deflate',
-            'X-Requested-With:  XMLHttpRequest',
-            'Cookie: ' . array_keys($cookies)[0] . "=" . $cookies[array_keys($cookies)[0]]
-        )
-    ));
-
-    $response = curl_exec($curl);
-    curl_close($curl);
-    return $response = json_decode($response);
-}
-function getMarzbanToken($server_id){
-    global $connection;
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id = ?");
-    $stmt->bind_param('i', $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-    
-    $panel_url = $server_info['panel_url'];
-    $username = $server_info['username'];
-    $password = $server_info['password'];
-    
-    $loginUrl = $panel_url .'/api/admin/token';
-    $postFields = array(
-        'username' => $username,
-        'password' => $password
-    );
-    
-    
-    $curl = curl_init();
-    curl_setopt($curl, CURLOPT_URL, $loginUrl);
-    curl_setopt($curl, CURLOPT_FOLLOWLOCATION, 1);
-    curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
-    curl_setopt($curl, CURLOPT_POST, 1);
-    curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 3);
-    curl_setopt($curl, CURLOPT_TIMEOUT, 3); 
-    curl_setopt($curl, CURLOPT_POSTFIELDS, http_build_query($postFields));
-    curl_setopt($curl, CURLOPT_HTTPHEADER, array(
-            'Content-Type: application/x-www-form-urlencoded',
-            'accept: application/json'
-        ));
-    $response = curl_exec($curl);
-    if (curl_error($curl)) {
-        return (object) ['success'=>false, 'detail'=>curl_error($curl)];
-    }
-    curl_close($curl);
-
-    return json_decode($response);
-}
-function getMarzbanJson($server_id, $token = null){
-    global $connection;
-    
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-
-    $panel_url = $server_info['panel_url'];
-
-    if($token == null) $token = getMarzbanToken($server_id);
-    if(isset($token->detail)){return (object) ['success'=>false, 'msg'=>$token->detail];}
-    $panel_url .= '/api/users';
-    $curl = curl_init();
-    curl_setopt($curl, CURLOPT_URL, $panel_url);
-    curl_setopt($curl, CURLOPT_HTTPGET, true);
-    curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($curl, CURLOPT_HTTPHEADER, array(
-        'Accept: application/json',
-        'Authorization: Bearer ' . $token->access_token
-    ));
-
-    $response = json_decode(curl_exec($curl));
-    curl_close($curl);
-
-    return $response;
-}
-function getMarzbanUserInfo($server_id, $remark){
-    global $connection;
-    
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-
-    $panel_url = $server_info['panel_url'];
-
-    $configInfo = array();
-    $curl = curl_init();
-    for($i = 0; $i <= 10; $i++){
-        $info = getMarzbanUser($server_id, $remark);
-		$subLink = "/sub/" . (explode("/sub/", $info->subscription_url)[1]);
-		$info->subscription_url = $subLink;
-        curl_setopt($curl, CURLOPT_URL, $panel_url . $info->subscription_url);
-        curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 3);
-        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($curl, CURLOPT_TIMEOUT, 3); 
-        $response = curl_exec($curl);
-        if($response && !curl_error($curl)){
-            $configInfo = $info;
-            break;
-        }
-		if($i == 10) $configInfo = $info;
-    }
-    curl_close($curl);
-
-    return (object) $configInfo;
-}
-function getMarzbanUser($server_id, $remark, $token = null){
-    global $connection;
-    
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-
-    $panel_url = $server_info['panel_url'];
-
-    if($token == null) $token = getMarzbanToken($server_id);
-    if(isset($token->detail)){return (object) ['success'=>false, 'msg'=>$token->detail];}
-    
-    $panel_url .= '/api/user/' . urlencode($remark);
-
-    $curl = curl_init();
-    curl_setopt($curl, CURLOPT_URL, $panel_url);
-    curl_setopt($curl, CURLOPT_HTTPGET, true);
-    curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($curl, CURLOPT_HTTPHEADER, array(
-        'Accept: application/json',
-        'Authorization: Bearer ' . $token->access_token
-    ));
-
-    $response = json_decode(curl_exec($curl));
-    
-    curl_close($curl);
-    return $response;
-}
-function getMarzbanHosts($server_id){
-    global $connection;
-    
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-
-    $panel_url = $server_info['panel_url'];
-
-    $token = getMarzbanToken($server_id);
-    if(isset($token->detail)){return (object) ['success'=>false, 'msg'=>$token->detail];}
-
-    $panel_url .= '/api/core/config';
-
-    $curl = curl_init();
-    curl_setopt($curl, CURLOPT_URL, $panel_url);
-    curl_setopt($curl, CURLOPT_HTTPGET, true);
-    curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($curl, CURLOPT_HTTPHEADER, array(
-        'Accept: application/json',
-        'Authorization: Bearer ' . $token->access_token
-    ));
-
-    $response = json_decode(curl_exec($curl));
-    
-    curl_close($curl);
-    return $response;
-}
-function addMarzbanUser($server_id, $remark, $volume, $days, $plan_id){
-    global $connection;
-    
-    $stmt = $connection->prepare("SELECT * FROM server_config WHERE id=?");
-    $stmt->bind_param("i", $server_id);
-    $stmt->execute();
-    $server_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-
-    $panel_url = $server_info['panel_url'];
-    $serverName = $server_info['username'];
-    $serverPass = $server_info['password'];
-    $serverType = $server_info['type'];
-    
-    
-    $stmt = $connection->prepare("SELECT * FROM `server_plans` WHERE `id` = ?");
-    $stmt->bind_param('i', $plan_id);
-    $stmt->execute();
-    $planInfo = json_decode($stmt->get_result()->fetch_assoc()['custom_sni'],true);
-    $stmt->close();
-
-    $token = getMarzbanToken($server_id);
-    if(isset($token->detail)){return (object) ['success'=>false, 'msg'=>$token->detail];}
-    $postFields = array(
-        "inbounds" => $planInfo['inbounds'],
-        "proxies" => $planInfo['proxies'],
-        "expire" => time() + (86400 * $days),
-        "data_limit" => $volume * 1073741824,
-        "username" => urlencode($remark)
-    );
-
-
-    $curl = curl_init();
-    curl_setopt($curl, CURLOPT_URL, $panel_url . "/api/user");
-    curl_setopt($curl, CURLOPT_POST, true);
-    curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($curl, CURLOPT_HTTPHEADER, array(
-        'Accept: application/json',
-        'Authorization: Bearer ' .  $token->access_token,
-        'Content-Type: application/json'
-    ));
-    curl_setopt($curl, CURLOPT_POSTFIELDS, json_encode($postFields));
-
-    $response = json_decode(curl_exec($curl));
-    curl_close($curl);
-    if(isset($response->detail) || !isset($response->links)){
-		$detail = $response->detail;
-        return (object) ['success'=>false, 'msg' => is_object($detail)?implode("-", (array) $detail):$detail];
-    }
-    $userInfo = getMarzbanUserInfo($server_id, $remark);
-
-    return (object) [
-        'success'=>true,
-        'sub_link'=> $userInfo->subscription_url,
-        'vray_links' => $response->links
-        ];
-}
 function editMarzbanConfig($server_id,$info){
     global $connection;
     
